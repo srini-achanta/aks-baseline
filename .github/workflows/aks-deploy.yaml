@@ -68,7 +68,7 @@ jobs:
       with:
         inlineScript: |
          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.RESOURCE_GROUP_LOCATION }}
-         az deployment group $([[ ${{ github.event_name }} = pull_request ]] && echo what-if --no-pretty-print || echo create) \
+         az deployment group $([[ ${{ github.event_name }} = pull_request ]] && echo create) \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --template-file "cluster-stamp.json" \
             --name "cluster-stamp" \
