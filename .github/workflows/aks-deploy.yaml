@@ -58,6 +58,7 @@ jobs:
     - name: Azure Login
       uses: Azure/login@v1
       with:
+        azcliversion: 2.28.0
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     # Deploy the cluster into your environment, assuming all prerequisites are up and running.
