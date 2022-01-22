@@ -56,14 +56,14 @@ jobs:
 
     # Login into your Azure Subscription using your Azure credentials - make sure the credentials has write permissions for the specific resource group/subscription. The credentials should be stored in GitHub Secrets - (Go to Settings Tab ->Secrets)
     - name: Azure Login
-      uses: Azure/login@v1.1
+      uses: Azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     # Deploy the cluster into your environment, assuming all prerequisites are up and running.
     - name: Azure CLI - Deploy AKS cluster
       id: aks-cluster
-      uses: Azure/cli@v1.0.0
+      uses: Azure/cli@v1
       with:
         inlineScript: |
          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.RESOURCE_GROUP_LOCATION }}
