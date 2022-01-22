@@ -58,6 +58,7 @@ jobs:
     - name: Azure Login
       uses: Azure/login@v1
       with:
+        azcliversion: 2.28.0
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     # Deploy the cluster into your environment, assuming all prerequisites are up and running.
@@ -65,6 +66,7 @@ jobs:
       id: aks-cluster
       uses: Azure/cli@v1
       with:
+        azcliversion: 2.28.0
         inlineScript: |
          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.RESOURCE_GROUP_LOCATION }}
          az deployment group $([[ ${{ github.event_name }} = pull_request ]] && echo what-if --no-pretty-print || echo create) \
