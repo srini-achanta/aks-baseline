@@ -86,8 +86,7 @@ jobs:
               gitOpsBootstrappingRepoHttpsUrl=${{ env.BOOTSTRAPPING_REPO_HTTPS_URL }}
 
           echo "::set-output name=name::$(az deployment group show --resource-group ${{ env.RESOURCE_GROUP }} -n cluster-stamp --query properties.outputs.aksClusterName.value -o tsv)"
-        azcliversion: 2.28.0
-
+        
     # If you needed to do any post-deployment bootstrapping that was not already set up you can follow
     # a pattern like the following. They don't do anything meaningful, but are left here as a quickstart
     # guide for your own post-deployment, pipeline-based configuration
