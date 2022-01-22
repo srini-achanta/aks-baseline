@@ -58,7 +58,6 @@ jobs:
     - name: Azure Login
       uses: Azure/login@v1
       with:
-        azcliversion: 2.28.0
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     # Deploy the cluster into your environment, assuming all prerequisites are up and running.
@@ -66,7 +65,6 @@ jobs:
       id: aks-cluster
       uses: Azure/cli@v1
       with:
-        azcliversion: 2.28.0
         inlineScript: |
          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.RESOURCE_GROUP_LOCATION }}
          az deployment group $([[ ${{ github.event_name }} = pull_request ]] && echo what-if --no-pretty-print || echo create) \
@@ -87,7 +85,7 @@ jobs:
               gitOpsBootstrappingRepoHttpsUrl=${{ env.BOOTSTRAPPING_REPO_HTTPS_URL }}
 
           echo "::set-output name=name::$(az deployment group show --resource-group ${{ env.RESOURCE_GROUP }} -n cluster-stamp --query properties.outputs.aksClusterName.value -o tsv)"
-        azcliversion: 2.29.2
+        azcliversion: 2.28.0
 
     # If you needed to do any post-deployment bootstrapping that was not already set up you can follow
     # a pattern like the following. They don't do anything meaningful, but are left here as a quickstart
