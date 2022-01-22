@@ -1,5 +1,5 @@
 # This workflow will deploy our bootstrapped cluster stamp, without the workload.
-#
+# 
 # Follow the next steps to use this workflow:
 #
 # 1. Your repository has the following structure.
