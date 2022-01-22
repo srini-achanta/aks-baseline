@@ -152,7 +152,7 @@
 
         "clusterControlPlaneIdentityName": "[concat('mi-', variables('clusterName'), '-controlplane')]",
 
-        "keyVaultName": "[concat('kv-', variables('clusterName'))]",
+        "keyVaultName": "[concat('kv-k8s-', variables('clusterName'))]",
 
         "aksIngressDomainName": "[concat('aks-ingress.', parameters('domainName'))]",
         "aksBackendDomainName": "[concat('bu0001a0008-00.', variables('aksIngressDomainName'))]",
