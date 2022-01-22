@@ -56,14 +56,15 @@ jobs:
 
     # Login into your Azure Subscription using your Azure credentials - make sure the credentials has write permissions for the specific resource group/subscription. The credentials should be stored in GitHub Secrets - (Go to Settings Tab ->Secrets)
     - name: Azure Login
-      uses: Azure/login@v1.1
+      uses: Azure/login@v1
       with:
+        azcliversion: 2.28.0
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     # Deploy the cluster into your environment, assuming all prerequisites are up and running.
     - name: Azure CLI - Deploy AKS cluster
       id: aks-cluster
-      uses: Azure/cli@v1.0.0
+      uses: Azure/cli@v1
       with:
         inlineScript: |
          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.RESOURCE_GROUP_LOCATION }}
@@ -82,11 +83,10 @@ jobs:
               appGatewayListenerCertificate=${{ secrets.APP_GATEWAY_LISTENER_CERTIFICATE_BASE64 }} \
               aksIngressControllerCertificate=${{ secrets.AKS_INGRESS_CONTROLLER_CERTIFICATE_BASE64 }} \
               domainName=${{ env.DOMAIN_NAME }} \
-              gitOpsBootstrappingRepoHttpsUrl=${{ BOOTSTRAPPING_REPO_HTTPS_URL }}
+              gitOpsBootstrappingRepoHttpsUrl=${{ env.BOOTSTRAPPING_REPO_HTTPS_URL }}
 
           echo "::set-output name=name::$(az deployment group show --resource-group ${{ env.RESOURCE_GROUP }} -n cluster-stamp --query properties.outputs.aksClusterName.value -o tsv)"
-        azcliversion: 2.29.2
-
+        
     # If you needed to do any post-deployment bootstrapping that was not already set up you can follow
     # a pattern like the following. They don't do anything meaningful, but are left here as a quickstart
     # guide for your own post-deployment, pipeline-based configuration
