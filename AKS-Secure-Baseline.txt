@@ -1,0 +1,285 @@
+#Step 1: Prerequisites
+az feature register --namespace "Microsoft.ContainerService" -n "EventgridPreview"
+az feature register --namespace "Microsoft.ContainerService" -n "AKS-ExtensionManager"
+az feature register --namespace "Microsoft.KubernetesConfiguration" -n "fluxConfigurations"
+
+
+# Keep running until all say "Registered." (This may take up to 20 minutes.)
+az feature list -o table --query "[?name=='Microsoft.ContainerService/EventgridPreview' || name=='Microsoft.ContainerService/AKS-ExtensionManager' || name=='Microsoft.KubernetesConfiguration/fluxConfigurations'].{Name:name,State:properties.state}"
+
+# When all say "Registered" then re-register the AKS and related resource providers
+az provider register --namespace Microsoft.ContainerService
+az provider register --namespace Microsoft.KubernetesConfiguration
+
+# Keep running until all say "Registered." (This may take up to 20 minutes.)
+az provider list -o table --query "[?namespace=='Microsoft.ContainerService' || namespace=='Microsoft.KubernetesConfiguration']"
+az provider list -o table --query "[?registrationState=='Registered']"
+
+#git clone https://github.com/srini-achanta/aks-baseline.git
+cd clouddrive/aks-baseline/aks-baseline
+
+
+#step 2 : Generate Client facing certificates
+export DOMAIN_NAME_AKS_BASELINE="contoso.com"
+
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -out appgw.crt -keyout appgw.key -subj "/CN=bicycle.${DOMAIN_NAME_AKS_BASELINE}/O=Contoso Bicycle" -addext "subjectAltName = DNS:bicycle.${DOMAIN_NAME_AKS_BASELINE}" -addext "keyUsage = digitalSignature" -addext "extendedKeyUsage = serverAuth"
+openssl pkcs12 -export -out appgw.pfx -in appgw.crt -inkey appgw.key -passout pass:
+
+export APP_GATEWAY_LISTENER_CERTIFICATE_AKS_BASELINE=$(cat appgw.pfx | base64 | tr -d '\n')
+
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -out traefik-ingress-internal-aks-ingress-tls.crt -keyout traefik-ingress-internal-aks-ingress-tls.key -subj "/CN=*.aks-ingress.${DOMAIN_NAME_AKS_BASELINE}/O=Contoso AKS Ingress"
+
+export AKS_INGRESS_CONTROLLER_CERTIFICATE_BASE64_AKS_BASELINE=$(cat traefik-ingress-internal-aks-ingress-tls.crt | base64 | tr -d '\n')
+
+# run the saveenv.sh script at any time to save environment variables created above to aks_baseline.env
+./saveenv.sh
+
+# if your terminal session gets reset, you can source the file to reload the environment variables
+# source aks_baseline.env
+
+#step 3 : Setup AD groups
+export TENANTID_AZURERBAC_AKS_BASELINE=$(az account show --query tenantId -o tsv)
+
+export AADOBJECTID_GROUP_CLUSTERADMIN_AKS_BASELINE=$(az ad group create --display-name 'cluster-admins-bu0001a000800' --mail-nickname 'cluster-admins-bu0001a000800' --description "Principals in this group are cluster admins in the bu0001a000800 cluster." --query objectId -o tsv)
+
+export AADOBJECTID_GROUP_A0008_READER_AKS_BASELINE=$(az ad group create --display-name 'cluster-ns-a0008-readers-bu0001a000800' --mail-nickname 'cluster-ns-a0008-readers-bu0001a000800' --description "Principals in this group are readers of namespace a0008 in the bu0001a000800 cluster." --query objectId -o tsv)
+
+# run the saveenv.sh script at any time to save environment variables created above to aks_baseline.env
+./saveenv.sh
+
+# if your terminal session gets reset, you can source the file to reload the environment variables
+# source aks_baseline.env
+
+
+#step 4: Deploy Hub-Spoke Network Topology
+az group create -n rg-enterprise-networking-hubs -l southcentralus
+az group create -n rg-enterprise-networking-spokes -l southcentralus
+az deployment group create -g rg-enterprise-networking-hubs -f networking/hub-default.json -p location=southcentralus
+RESOURCEID_VNET_HUB=$(az deployment group show -g rg-enterprise-networking-hubs -n hub-default --query properties.outputs.hubVnetId.value -o tsv)
+
+# [This takes about five minutes to run.]
+az deployment group create -g rg-enterprise-networking-spokes -f networking/spoke-BU0001A0008.json -p location=southcentralus hubVnetResourceId="${RESOURCEID_VNET_HUB}"
+
+RESOURCEID_SUBNET_NODEPOOLS=$(az deployment group show -g rg-enterprise-networking-spokes -n spoke-BU0001A0008 --query properties.outputs.nodepoolSubnetResourceIds.value -o tsv)
+
+# [This takes about seven minutes to run.]
+az deployment group create -g rg-enterprise-networking-hubs -f networking/hub-regionA.json -p location=southcentralus nodepoolSubnetResourceIds="['${RESOURCEID_SUBNET_NODEPOOLS}']"
+
+# run the saveenv.sh script at any time to save environment variables created above to aks_baseline.env
+./saveenv.sh
+
+# if your terminal session gets reset, you can source the file to reload the environment variables
+# source aks_baseline.env
+
+#step 5: Cluster bootstrapping
+az group create --name rg-bu0001a0008 --location southcentralus
+export RESOURCEID_VNET_CLUSTERSPOKE_AKS_BASELINE=$(az deployment group show -g rg-enterprise-networking-spokes -n spoke-BU0001A0008 --query properties.outputs.clusterVnetResourceId.value -o tsv)
+az deployment group create -g rg-bu0001a0008 -f acr-stamp.json -p location=southcentralus targetVnetResourceId=${RESOURCEID_VNET_CLUSTERSPOKE_AKS_BASELINE}
+# Get your ACR instance name
+export ACR_NAME_AKS_BASELINE=$(az deployment group show -g rg-bu0001a0008 -n acr-stamp --query properties.outputs.containerRegistryName.value -o tsv)
+
+# Import core image(s) hosted in public container registries to be used during bootstrapping
+az acr import --source docker.io/weaveworks/kured:1.9.0 -n $ACR_NAME_AKS_BASELINE
+
+sed -i "s:docker.io:${ACR_NAME_AKS_BASELINE}.azurecr.io:" ./cluster-manifests/cluster-baseline-settings/kured.yaml
+git config --global user.email "srini.s.achanta@gmail.com"
+git config --global user.name "srini-achanta"
+
+git commit -a -m "Update image source to use my ACR instance instead of a public container registry."
+git push
+
+./saveenv.sh
+
+#step 6: Deploy AKS Cluster
+GITOPS_REPOURL=$(git config --get remote.origin.url)
+# Create an Azure Service Principal
+az ad sp create-for-rbac --name "github-workflow-aks-cluster" --sdk-auth --skip-assignment > sp.json
+export APP_ID=$(grep -oP '(?<="clientId": ").*?[^\\](?=",)' sp.json)
+
+# Wait for propagation
+until az ad sp show --id ${APP_ID} &> /dev/null ; do echo "Waiting for Azure AD propagation" && sleep 5; done
+
+# Assign built-in Contributor RBAC role for creating resource groups and performing deployments at subscription level
+az role assignment create --assignee $APP_ID --role 'Contributor'
+
+# Assign built-in User Access Administrator RBAC role since granting RBAC access to other resources during the cluster creation will be required at subscription level (e.g. AKS-managed Internal Load Balancer, ACR, Managed Identities, etc.)
+az role assignment create --assignee $APP_ID --role 'User Access Administrator'
+
+cat sp.json
+
+#Create AZURE_CREDENTIALS secret in your GitHub repository. Use contents of sp.json
+#Create APP_GATEWAY_LISTENER_CERTIFICATE_BASE64 secret in your GitHub repository. Use $APP_GATEWAY_LISTENER_CERTIFICATE_AKS_BASELINE
+#Create AKS_INGRESS_CONTROLLER_CERTIFICATE_BASE64 secret in your GitHub repository. Use $AKS_INGRESS_CONTROLLER_CERTIFICATE_BASE64_AKS_BASELINE 
+
+mkdir -p .github/workflows
+cat github-workflow/aks-deploy.yaml | \
+    sed "s#<resource-group-location>#southcentralus#g" | \
+    sed "s#<resource-group-name>#rg-bu0001a0008#g" | \
+    sed "s#<geo-redundancy-location>#centralus#g" | \
+    sed "s#<cluster-spoke-vnet-resource-id>#${RESOURCEID_VNET_CLUSTERSPOKE_AKS_BASELINE}#g" | \
+    sed "s#<tenant-id-with-user-admin-permissions>#${TENANTID_K8SRBAC_AKS_BASELINE}#g" | \
+    sed "s#<azure-ad-aks-admin-group-object-id>#${AADOBJECTID_GROUP_CLUSTERADMIN_AKS_BASELINE}#g" | \
+    sed "s#<azure-ad-aks-a0008-group-object-id>#${AADOBJECTID_GROUP_A0008_READER_AKS_BASELINE}#g" | \
+    sed "s#<domain-name>#${DOMAIN_NAME_AKS_BASELINE}#g" | \
+    sed "s#<bootstrapping-repo-https-url>#${GITOPS_REPOURL}#g" \
+    > .github/workflows/aks-deploy.yaml
+
+git add .github/workflows/aks-deploy.yaml && git commit -m "setup GitHub CD workflow"
+git push origin HEAD:kick-off-workflow
+
+#Note:  Had to make changes to Cluster-stamp.json and aks-deploy.json for it to work
+#step 7: Validate AKS Cluster
+AKS_CLUSTER_NAME=$(az aks list -g rg-bu0001a0008 --query '[0].name' -o tsv)
+az aks get-credentials -g rg-bu0001a0008 -n $AKS_CLUSTER_NAME
+kubectl get nodes
+kubectl get namespaces
+kubectl get all -n cluster-baseline-settings
+
+#step 8: Workload Prerequisites
+export KEYVAULT_NAME_AKS_BASELINE=$(az deployment group show --resource-group rg-bu0001a0008 -n cluster-stamp --query properties.outputs.keyVaultName.value -o tsv)
+TEMP_ROLEASSIGNMENT_TO_UPLOAD_CERT=$(az role assignment create --role a4417e6f-fecd-4de8-b567-7b0420556985 --assignee-principal-type user --assignee-object-id $(az ad signed-in-user show --query 'objectId' -o tsv) --scope $(az keyvault show --name $KEYVAULT_NAME_AKS_BASELINE --query 'id' -o tsv) --query 'id' -o tsv)
+
+# If you are behind a proxy or some other egress that does not provide a consistent IP, you'll need to manually adjust the
+# Azure Key Vault firewall to allow this traffic.
+CURRENT_IP_ADDRESS=$(curl -s https://ifconfig.io)
+az keyvault network-rule add -n $KEYVAULT_NAME_AKS_BASELINE --ip-address ${CURRENT_IP_ADDRESS}
+
+cat traefik-ingress-internal-aks-ingress-tls.crt traefik-ingress-internal-aks-ingress-tls.key > traefik-ingress-internal-aks-ingress-tls.pem
+az keyvault certificate import -f traefik-ingress-internal-aks-ingress-tls.pem -n traefik-ingress-internal-aks-ingress-tls --vault-name $KEYVAULT_NAME_AKS_BASELINE
+
+az keyvault network-rule remove -n $KEYVAULT_NAME_AKS_BASELINE --ip-address "${CURRENT_IP_ADDRESS}/32"
+az role assignment delete --ids $TEMP_ROLEASSIGNMENT_TO_UPLOAD_CERT
+
+kubectl get constrainttemplate
+
+
+#step 9: Secrets management
+TRAEFIK_USER_ASSIGNED_IDENTITY_RESOURCE_ID=$(az deployment group show --resource-group rg-bu0001a0008 -n cluster-stamp --query properties.outputs.aksIngressControllerPodManagedIdentityResourceId.value -o tsv)
+TRAEFIK_USER_ASSIGNED_IDENTITY_CLIENT_ID=$(az deployment group show --resource-group rg-bu0001a0008 -n cluster-stamp --query properties.outputs.aksIngressControllerPodManagedIdentityClientId.value -o tsv)
+
+# press Ctrl-C once you receive a successful response
+kubectl get ns a0008 -w
+
+export TENANTID_AZURERBAC_AKS_BASELINE=$(az account show --query tenantId -o tsv)
+export KEYVAULT_NAME_AKS_BASELINE=$(az deployment group show --resource-group rg-bu0001a0008 -n cluster-stamp --query properties.outputs.keyVaultName.value -o tsv)
+
+cat <<EOF | kubectl create -f -
+apiVersion: aadpodidentity.k8s.io/v1
+kind: AzureIdentity
+metadata:
+  name: podmi-ingress-controller-identity
+  namespace: a0008
+spec:
+  type: 0
+  resourceID: $TRAEFIK_USER_ASSIGNED_IDENTITY_RESOURCE_ID
+  clientID: $TRAEFIK_USER_ASSIGNED_IDENTITY_CLIENT_ID
+---
+apiVersion: aadpodidentity.k8s.io/v1
+kind: AzureIdentityBinding
+metadata:
+  name: podmi-ingress-controller-binding
+  namespace: a0008
+spec:
+  azureIdentity: podmi-ingress-controller-identity
+  selector: podmi-ingress-controller
+EOF
+
+cat <<EOF | kubectl create -f -
+apiVersion: secrets-store.csi.x-k8s.io/v1alpha1
+kind: SecretProviderClass
+metadata:
+  name: aks-ingress-tls-secret-csi-akv
+  namespace: a0008
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "true"
+    keyvaultName: $KEYVAULT_NAME_AKS_BASELINE
+    objects:  |
+      array:
+        - |
+          objectName: traefik-ingress-internal-aks-ingress-tls
+          objectAlias: tls.crt
+          objectType: cert
+        - |
+          objectName: traefik-ingress-internal-aks-ingress-tls
+          objectAlias: tls.key
+          objectType: secret
+    tenantId: $TENANTID_AZURERBAC_AKS_BASELINE
+EOF
+
+export ACR_NAME_AKS_BASELINE=$(az deployment group show -g rg-bu0001a0008 -n acr-stamp --query properties.outputs.containerRegistryName.value -o tsv)
+
+# Import ingress controller image hosted in public container registries
+az acr import --source docker.io/library/traefik:v2.5.3 -n $ACR_NAME_AKS_BASELINE
+
+
+kubectl create -f https://raw.githubusercontent.com/mspnp/aks-secure-baseline/main/workload/traefik.yaml
+#kubectl delete -f https://raw.githubusercontent.com/mspnp/aks-secure-baseline/main/workload/traefik.yaml
+
+kubectl wait -n a0008 --for=condition=ready pod --selector=app.kubernetes.io/name=traefik-ingress-ilb --timeout=90s
+kubectl get pods --selector=app.kubernetes.io/name=traefik-ingress-ilb -n a0008
+
+kubectl describe pod --selector=app.kubernetes.io/name=traefik-ingress-ilb -n a0008
+
+#step 10: Deploy workload
+
+kubectl apply -k workload/
+kubectl wait -n a0008 --for=condition=ready pod --selector=app.kubernetes.io/name=aspnetapp --timeout=90s
+kubectl get ingress aspnetapp-ingress -n a0008
+
+kubectl get pods --selector=app.kubernetes.io/name=aspnetapp -n a0008
+kubectl describe pod --selector=app.kubernetes.io/name=aspnetapp -n a0008
+kubectl run curl -n a0008 -i --tty --rm --image=mcr.microsoft.com/azure-cli --overrides='[{"op":"add","path":"/spec/containers/0/resources","value":{"limits":{"cpu":"200m","memory":"128Mi"}}}]' --override-type json
+
+# From within the open shell now running on a container inside your cluster
+DOMAIN_NAME="contoso.com" # <-- Change to your custom domain value if a different one was used
+curl -kI https://bu0001a0008-00.aks-ingress.$DOMAIN_NAME -w '%{remote_ip}\n'
+exit
+
+
+
+cat <<EOF | kubectl delete -f -
+apiVersion: secrets-store.csi.x-k8s.io/v1alpha1
+kind: SecretProviderClass
+metadata:
+  name: aks-ingress-tls-secret-csi-akv
+  namespace: a0008
+spec:
+  provider: azure
+  parameters:
+    usePodIdentity: "true"
+    keyvaultName: $KEYVAULT_NAME_AKS_BASELINE
+    objects:  |
+      array:
+        - |
+          objectName: traefik-ingress-internal-aks-ingress-tls
+          objectAlias: tls.crt
+          objectType: cert
+        - |
+          objectName: traefik-ingress-internal-aks-ingress-tls
+          objectAlias: tls.key
+          objectType: secret
+    tenantId: $TENANTID_AZURERBAC_AKS_BASELINE
+EOF
+
+cat <<EOF | kubectl delete -f -
+apiVersion: aadpodidentity.k8s.io/v1
+kind: AzureIdentity
+metadata:
+  name: podmi-ingress-controller-identity
+  namespace: a0008
+spec:
+  type: 0
+  resourceID: $TRAEFIK_USER_ASSIGNED_IDENTITY_RESOURCE_ID
+  clientID: $TRAEFIK_USER_ASSIGNED_IDENTITY_CLIENT_ID
+---
+apiVersion: aadpodidentity.k8s.io/v1
+kind: AzureIdentityBinding
+metadata:
+  name: podmi-ingress-controller-binding
+  namespace: a0008
+spec:
+  azureIdentity: podmi-ingress-controller-identity
+  selector: podmi-ingress-controller
+EOF
