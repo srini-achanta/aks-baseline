@@ -1014,7 +1014,7 @@
                     "userAssignedIdentities": [],
                     "userAssignedIdentityExceptions": []
                 },
-                "disableLocalAccounts": true
+                "disableLocalAccounts": false
             },
             "identity": {
                 "type": "UserAssigned",
